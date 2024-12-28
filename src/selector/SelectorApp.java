@@ -383,16 +383,18 @@ public class SelectorApp implements PropertyChangeListener {
         if (img == null) {
             throw new IOException("Could not load image: " + imagePath);
         }
+        float C = 230.0f;
+        float FACTOR = (259 * (C + 255)) / (255 * (259 - C));
 
         // Increase contrast
         BufferedImage contrastedImg = new BufferedImage(img.getWidth(), img.getHeight(), img.getType());
         for (int x = 0; x < img.getWidth(); x++) {
             for (int y = 0; y < img.getHeight(); y++) {
             Color color = new Color(img.getRGB(x, y));
-            // Increase contrast by expanding color range around middle gray with a factor of 2
-            int r = Math.min(255, Math.max(0, (int)(((color.getRed() - 128) * 10.0) + 128)));
-            int g = Math.min(255, Math.max(0, (int)(((color.getGreen() - 128) * 10.0) + 128)));
-            int b = Math.min(255, Math.max(0, (int)(((color.getBlue() - 128) * 10.0) + 128)));
+            // Increase contrast by expanding color range around middle gray with a factor of FACTOR
+            int r = Math.min(255, Math.max(0, (int)(((color.getRed() - 128) * FACTOR) + 128)));
+            int g = Math.min(255, Math.max(0, (int)(((color.getGreen() - 128) * FACTOR) + 128)));
+            int b = Math.min(255, Math.max(0, (int)(((color.getBlue() - 128) * FACTOR) + 128)));
             contrastedImg.setRGB(x, y, new Color(r, g, b).getRGB());
             }
         }
@@ -420,9 +422,7 @@ public class SelectorApp implements PropertyChangeListener {
         return path;
     }
 
-    /**
-     * Example usage
-     */
+
     public static void main(String[] args) {
         // Can still keep the GUI version in an if block
         System.out.println(Arrays.toString(args));
@@ -444,13 +444,13 @@ public class SelectorApp implements PropertyChangeListener {
                     
                     // Read all lines into a list
                     java.util.List<String> allLines = new java.util.ArrayList<>();
-                    BufferedReader initialReader = new BufferedReader(new FileReader(csvPath));
-                    String header = initialReader.readLine(); // Save header
-                    String line;
-                    while ((line = initialReader.readLine()) != null) {
-                        allLines.add(line);
+                    try (BufferedReader initialReader = new BufferedReader(new FileReader(csvPath))) {
+                        initialReader.readLine(); // Skip header
+                        String line;
+                        while ((line = initialReader.readLine()) != null) {
+                            allLines.add(line);
+                        }
                     }
-                    initialReader.close();
                     
                     // Shuffle the lines
                     java.util.Collections.shuffle(allLines);
@@ -481,19 +481,14 @@ public class SelectorApp implements PropertyChangeListener {
                                 int height = img.getHeight();
                                 Point start = new Point(width/2, height/2);
                                 // Try paths to all four sides
-                                Point endRight = new Point(width-1, height/2);
-                                Point endLeft = new Point(0, height/2);
-                                Point endTop = new Point(width/2, 0);
-                                Point endBottom = new Point(width/2, height-1);
+                                Point endRight = new Point(width*3/4, height/2);
+                                Point endLeft = new Point(width/4, height/2);
 
                                 PolyLine pathRight = analyzePath(imagePath, start, endRight);
                                 PolyLine pathLeft = analyzePath(imagePath, start, endLeft);
 
                                 // Calculate max ratio across all paths
                                 double maxRatio = 0.0;
-
-                                double sumRatios = 0.0;
-                                int numPaths = 0;
 
                                 // Check height ratios for left/right paths
                                 for (PolyLine p : new PolyLine[]{pathRight, pathLeft}) {
@@ -503,14 +498,11 @@ public class SelectorApp implements PropertyChangeListener {
                                         minY = Math.min(minY, y);
                                         maxY = Math.max(maxY, y);
                                     }
-                                    sumRatios += (maxY - minY) / (double)height;
-                                    numPaths++;
+                                    maxRatio = Math.max((maxY - minY) / (double)height, maxRatio);
                                 }
-
-                                maxRatio = sumRatios / numPaths;
                                 
                                 // Make prediction
-                                String prediction = maxRatio < 0.01 ? "nv" : "mel";
+                                String prediction = maxRatio < 0.01 || maxRatio > 0.03 ? "nv" : "mel";
                                 
                                 // Update confusion matrix
                                 if (diagnosis.equals("mel") && prediction.equals("mel")) {
