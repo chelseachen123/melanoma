@@ -16,6 +16,7 @@ import selector.SelectionModel.SelectionState;
 import scissors.ScissorsSelectionModel;
 import java.awt.event.ActionListener;
 import java.awt.event.ActionEvent;
+import java.util.Arrays;
 
 /**
  * A graphical application for selecting and extracting regions of images.
@@ -370,20 +371,201 @@ public class SelectorApp implements PropertyChangeListener {
     }
 
     /**
-     * Run an instance of SelectorApp.  No program arguments are expected.
+     * Analyzes the path between two points in an image using intelligent scissors algorithm
+     * @param imagePath Path to the image file
+     * @param start Starting point
+     * @param end End point
+     * @return The PolyLine representing the path between the points
+     */
+    public static PolyLine analyzePath(String imagePath, Point start, Point end) throws IOException {
+        // Load the image
+        BufferedImage img = ImageIO.read(new File(imagePath));
+        if (img == null) {
+            throw new IOException("Could not load image: " + imagePath);
+        }
+
+        // Increase contrast
+        BufferedImage contrastedImg = new BufferedImage(img.getWidth(), img.getHeight(), img.getType());
+        for (int x = 0; x < img.getWidth(); x++) {
+            for (int y = 0; y < img.getHeight(); y++) {
+            Color color = new Color(img.getRGB(x, y));
+            // Increase contrast by expanding color range around middle gray with a factor of 2
+            int r = Math.min(255, Math.max(0, (int)(((color.getRed() - 128) * 10.0) + 128)));
+            int g = Math.min(255, Math.max(0, (int)(((color.getGreen() - 128) * 10.0) + 128)));
+            int b = Math.min(255, Math.max(0, (int)(((color.getBlue() - 128) * 10.0) + 128)));
+            contrastedImg.setRGB(x, y, new Color(r, g, b).getRGB());
+            }
+        }
+
+        // Create a selection model using the color-aware weighing function
+        ScissorsSelectionModel model = new ScissorsSelectionModel("CrossGradMulti", true);
+        model.setImage(contrastedImg);
+
+        // Add the start point
+        model.addPoint(start);
+
+        // Wait for processing to complete (model will be in PROCESSING state initially)
+        while (model.state() == SelectionState.PROCESSING) {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+
+        // Get the path to the end point
+        PolyLine path = model.liveWire(end);
+        
+        return path;
+    }
+
+    /**
+     * Example usage
      */
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> {
-            // Set Swing theme to look the same (and less old) on all operating systems.
+        // Can still keep the GUI version in an if block
+        System.out.println(Arrays.toString(args));
+        if (args.length == 0) {
+            SwingUtilities.invokeLater(() -> {
+                // Original GUI code
+                try {
+                    UIManager.setLookAndFeel("javax.swing.plaf.nimbus.NimbusLookAndFeel");
+                } catch (Exception ignored) {}
+                SelectorApp app = new SelectorApp();
+                app.start();
+            });
+        } else {
+            // Programmatic usage example
             try {
-                UIManager.setLookAndFeel("javax.swing.plaf.nimbus.NimbusLookAndFeel");
-            } catch (Exception ignored) {
-                /* If the Nimbus theme isn't available, just use the platform default. */
-            }
+                if (args[0].equals("test")) {
+                    String csvPath = "HAM10000_metadata.csv";
+                    String imageDirPath = "HAM10000_images/HAM10000_images/";
+                    
+                    // Read all lines into a list
+                    java.util.List<String> allLines = new java.util.ArrayList<>();
+                    BufferedReader initialReader = new BufferedReader(new FileReader(csvPath));
+                    String header = initialReader.readLine(); // Save header
+                    String line;
+                    while ((line = initialReader.readLine()) != null) {
+                        allLines.add(line);
+                    }
+                    initialReader.close();
+                    
+                    // Shuffle the lines
+                    java.util.Collections.shuffle(allLines);
+                    
+                    int truePositives = 0;
+                    int trueNegatives = 0;
+                    int falsePositives = 0; 
+                    int falseNegatives = 0;
+                    
+                    int iterations = 0;
+                    int melCount = 0;
+                    for (String currentLine : allLines) {
+                        String[] parts = currentLine.split(",");
+                        String diagnosis = parts[2];
+                        if (diagnosis.equals("mel")) melCount++;
+                        if (iterations >= 20 && melCount >= 10) break;
+                        String imageId = parts[1];
+                        
+                        
+                        // Only process if diagnosis is "nv" or "mel"
+                        if (diagnosis.equals("nv") || diagnosis.equals("mel")) {
+                            iterations++;
+                            String imagePath = imageDirPath + imageId + ".jpg";
+                            
+                            try {
+                                BufferedImage img = ImageIO.read(new File(imagePath));
+                                int width = img.getWidth();
+                                int height = img.getHeight();
+                                Point start = new Point(width/2, height/2);
+                                // Try paths to all four sides
+                                Point endRight = new Point(width-1, height/2);
+                                Point endLeft = new Point(0, height/2);
+                                Point endTop = new Point(width/2, 0);
+                                Point endBottom = new Point(width/2, height-1);
 
-            // Create and start the app
-            SelectorApp app = new SelectorApp();
-            app.start();
-        });
+                                PolyLine pathRight = analyzePath(imagePath, start, endRight);
+                                PolyLine pathLeft = analyzePath(imagePath, start, endLeft);
+
+                                // Calculate max ratio across all paths
+                                double maxRatio = 0.0;
+
+                                double sumRatios = 0.0;
+                                int numPaths = 0;
+
+                                // Check height ratios for left/right paths
+                                for (PolyLine p : new PolyLine[]{pathRight, pathLeft}) {
+                                    int minY = Integer.MAX_VALUE;
+                                    int maxY = Integer.MIN_VALUE;
+                                    for (int y : p.ys()) {
+                                        minY = Math.min(minY, y);
+                                        maxY = Math.max(maxY, y);
+                                    }
+                                    sumRatios += (maxY - minY) / (double)height;
+                                    numPaths++;
+                                }
+
+                                maxRatio = sumRatios / numPaths;
+                                
+                                // Make prediction
+                                String prediction = maxRatio < 0.01 ? "nv" : "mel";
+                                
+                                // Update confusion matrix
+                                if (diagnosis.equals("mel") && prediction.equals("mel")) {
+                                    truePositives++;
+                                } else if (diagnosis.equals("nv") && prediction.equals("nv")) {
+                                    trueNegatives++;
+                                } else if (diagnosis.equals("nv") && prediction.equals("mel")) {
+                                    falsePositives++;
+                                } else if (diagnosis.equals("mel") && prediction.equals("nv")) {
+                                    falseNegatives++;
+                                }
+                                
+                                System.out.printf("%s: Actual=%s, Predicted=%s, Ratio=%.3f%n", 
+                                    imageId, diagnosis, prediction, maxRatio);
+                                
+                            } catch (IOException e) {
+                                System.err.println("Error processing " + imagePath + ": " + e.getMessage());
+                            }
+                        }
+                    }
+                    
+                    // Calculate metrics
+                    int total = truePositives + trueNegatives + falsePositives + falseNegatives;
+                    double accuracy = (double)(truePositives + trueNegatives) / total;
+                    double sensitivity = (double)truePositives / (truePositives + falseNegatives);
+                    double specificity = (double)trueNegatives / (trueNegatives + falsePositives);
+                    
+                    System.out.printf("%nMetrics:%n");
+                    System.out.printf("Accuracy: %.2f%% (%d/%d correct)%n", 
+                        accuracy * 100, (truePositives + trueNegatives), total);
+                    System.out.printf("Sensitivity: %.2f%%%n", sensitivity * 100);
+                    System.out.printf("Specificity: %.2f%%%n", specificity * 100);
+                    
+                } else {
+                    String imagePath = args[0];
+                    BufferedImage img = ImageIO.read(new File(imagePath));
+                    int width = img.getWidth();
+                    int height = img.getHeight();
+                    Point start = new Point(width/2, height/2);
+                    Point end = new Point(width-1, height/2);
+                    
+                    PolyLine path = analyzePath(imagePath, start, end);
+                    
+                    int minY = Integer.MAX_VALUE;
+                    int maxY = Integer.MIN_VALUE;
+                    for (int y : path.ys()) {
+                        minY = Math.min(minY, y);
+                        maxY = Math.max(maxY, y);
+                    }
+                    double heightRatio = (maxY - minY) / (double)height;
+                    System.out.printf("Height ratio: %.3f%n", heightRatio);
+                }
+            } catch (IOException e) {
+                System.err.println("Error processing image: " + e.getMessage());
+            }
+        }
     }
 }
