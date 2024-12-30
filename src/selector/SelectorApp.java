@@ -383,7 +383,7 @@ public class SelectorApp implements PropertyChangeListener {
         if (img == null) {
             throw new IOException("Could not load image: " + imagePath);
         }
-        float C = 230.0f;
+        float C = 250.0f;
         float FACTOR = (259 * (C + 255)) / (255 * (259 - C));
 
         // Increase contrast
@@ -425,7 +425,6 @@ public class SelectorApp implements PropertyChangeListener {
 
     public static void main(String[] args) {
         // Can still keep the GUI version in an if block
-        System.out.println(Arrays.toString(args));
         if (args.length == 0) {
             SwingUtilities.invokeLater(() -> {
                 // Original GUI code
@@ -466,9 +465,8 @@ public class SelectorApp implements PropertyChangeListener {
                         String[] parts = currentLine.split(",");
                         String diagnosis = parts[2];
                         if (diagnosis.equals("mel")) melCount++;
-                        if (iterations >= 20 && melCount >= 10) break;
+                        if (iterations >= 10 && melCount >= 50) break;
                         String imageId = parts[1];
-                        
                         
                         // Only process if diagnosis is "nv" or "mel"
                         if (diagnosis.equals("nv") || diagnosis.equals("mel")) {
@@ -479,30 +477,22 @@ public class SelectorApp implements PropertyChangeListener {
                                 BufferedImage img = ImageIO.read(new File(imagePath));
                                 int width = img.getWidth();
                                 int height = img.getHeight();
-                                Point start = new Point(width/2, height/2);
-                                // Try paths to all four sides
-                                Point endRight = new Point(width*3/4, height/2);
-                                Point endLeft = new Point(width/4, height/2);
+                                Point start = new Point(width*1/2, height/2);
+                                Point end = new Point(width*2/3, height/2);
 
-                                PolyLine pathRight = analyzePath(imagePath, start, endRight);
-                                PolyLine pathLeft = analyzePath(imagePath, start, endLeft);
+                                PolyLine path = analyzePath(imagePath, start, end);
 
-                                // Calculate max ratio across all paths
-                                double maxRatio = 0.0;
-
-                                // Check height ratios for left/right paths
-                                for (PolyLine p : new PolyLine[]{pathRight, pathLeft}) {
-                                    int minY = Integer.MAX_VALUE;
-                                    int maxY = Integer.MIN_VALUE;
-                                    for (int y : p.ys()) {
-                                        minY = Math.min(minY, y);
-                                        maxY = Math.max(maxY, y);
-                                    }
-                                    maxRatio = Math.max((maxY - minY) / (double)height, maxRatio);
+                                // Calculate ratio
+                                int minY = Integer.MAX_VALUE;
+                                int maxY = Integer.MIN_VALUE;
+                                for (int y : path.ys()) {
+                                    minY = Math.min(minY, y);
+                                    maxY = Math.max(maxY, y);
                                 }
+                                double ratio = (maxY - minY) / (double)height;
                                 
-                                // Make prediction
-                                String prediction = maxRatio < 0.01 || maxRatio > 0.03 ? "nv" : "mel";
+                                // Make prediction - using a lower threshold to maximize sensitivity
+                                String prediction = ratio < 0.003 | ratio > 0.05 ? "nv" : "mel";
                                 
                                 // Update confusion matrix
                                 if (diagnosis.equals("mel") && prediction.equals("mel")) {
@@ -515,8 +505,17 @@ public class SelectorApp implements PropertyChangeListener {
                                     falseNegatives++;
                                 }
                                 
+                                // Print to console
                                 System.out.printf("%s: Actual=%s, Predicted=%s, Ratio=%.3f%n", 
-                                    imageId, diagnosis, prediction, maxRatio);
+                                    imageId, diagnosis, prediction, ratio);
+                                    
+                                // Save ratio to appropriate file based on diagnosis
+                                String filename = diagnosis + "_ratios.txt";
+                                try (FileWriter fw = new FileWriter(filename, true)) {
+                                    fw.write(String.format("%s,%.3f%n", imageId, ratio));
+                                } catch (IOException e) {
+                                    System.err.println("Error writing to " + filename + ": " + e.getMessage());
+                                }
                                 
                             } catch (IOException e) {
                                 System.err.println("Error processing " + imagePath + ": " + e.getMessage());
@@ -541,8 +540,8 @@ public class SelectorApp implements PropertyChangeListener {
                     BufferedImage img = ImageIO.read(new File(imagePath));
                     int width = img.getWidth();
                     int height = img.getHeight();
-                    Point start = new Point(width/2, height/2);
-                    Point end = new Point(width-1, height/2);
+                    Point start = new Point(width/4, height/2);
+                    Point end = new Point(width*3/4, height/2);
                     
                     PolyLine path = analyzePath(imagePath, start, end);
                     
